@@ -1,0 +1,13 @@
+[project]
+name = "e-hentai-scraper"
+version = "0.1.0"
+description = "Add your description here"
+readme = "README.md"
+requires-python = ">=3.14"
+dependencies = [
+    "bs4>=0.0.2",
+    "lxml>=6.1.1",
+    "pathlib>=1.0.1",
+    "requests>=2.34.2",
+    "rich>=15.0.0",
+]
