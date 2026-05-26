@@ -118,6 +118,7 @@ def get_links_and_download(
     length = int(first_page.select("td.gdt2")[-2].get_text().split()[0])
     title_el = first_page.select_one("h1#gn")
     title = clean_filename(title_el.get_text(strip=True) if title_el else "gallery")
+    console.print(title)
     gallery_pages = get_gallery_page_urls(first_page, gallery_url)
     save_path = save_dir / title
     save_path.mkdir(parents=True, exist_ok=True)
