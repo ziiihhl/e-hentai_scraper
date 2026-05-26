@@ -22,8 +22,8 @@ from urllib3.util.retry import Retry
 
 
 console = Console(force_terminal=True)
-
-GALLERY_URL: str = "https://e-hentai.org/g/3957645/a217d63c59/"
+# https://e-hentai.org/g/3957694/0fdbde5aa0/
+GALLERY_URL: str = input("please input the gallery url you want to scrape: ")
 COOKIES: dict[str, str] = {
     "ipb_member_id": "8569968",
     "ipb_pass_hash": "8e729fb038bd7034112ff0c519d1d4dc",
