@@ -39,12 +39,20 @@ def input_gallery_url() -> str:
     parsed = urlparse(gallery_url)
 
     if parsed.scheme not in {"http", "https"} or not parsed.netloc or not parsed.path.startswith("/g/"):
-        raise ValueError("请输入有效的 e-hentai gallery URL，例如: https://e-hentai.org/g/3957694/0fdbde5aa0/")
+        raise ValueError("please input a valid e-hentai gallery URL，for example: https://e-hentai.org/g/3957694/0fdbde5aa0/")
 
     clean_path = parsed.path.rstrip("/") + "/"
     return urlunparse((parsed.scheme, parsed.netloc, clean_path, "", "", ""))
 
-
+def input_pages_to_download() -> tuple[int, int]:
+    pages_to_download = input("please enter the page range you want to download.Use a hyphen to separate the numbers, e.g. 1-30 : ").strip()
+    if pages_to_download:
+        match = re.search(r"(\d+)-(\d+)", pages_to_download)
+        start : int = int(match.group(1))
+        end : int = int(match.group(2))
+    else:
+        start = end = -1
+    return start, end
 def build_session() -> requests.Session:
     session = requests.Session()
     session.cookies.update(COOKIES)
@@ -83,27 +91,28 @@ def fetch_soup(session: requests.Session, url: str) -> BeautifulSoup:
     return BeautifulSoup(response.content, "lxml")
 
 
-def get_gallery_page_urls(soup: BeautifulSoup, gallery_url: str) -> list[str]:
-    page_links = soup.select("table.ptt a")
-    page_numbers = [
-        int(link.get_text(strip=True))
-        for link in page_links
-        if link.get_text(strip=True).isdigit()
-    ]
-    total_pages = max(page_numbers, default=1)
-    return [f"{gallery_url}?p={page}" for page in range(total_pages)]
+def get_gallery_page_urls(soup: BeautifulSoup, gallery_url: str) -> dict:
+    start , end = input_pages_to_download()
+    total_pages = int(soup.select("td.gdt2")[-2].get_text().split()[0])
+    if start == -1 and end == -1:
+        start = 1
+        end = total_pages
+    return {
+        "page_urls" : [f"{gallery_url}?p={page}" for page in range(start - 1,end)],
+        "page_range" : [start,end]
+    }
 
 
 def get_image_url(session: requests.Session, page_url: str) -> tuple[str, str]:
     soup = fetch_soup(session, page_url)
     image = soup.select_one("img#img")
     if not image or not image.get("src"):
-        raise RuntimeError(f"找不到普通图片链接: {page_url}")
+        raise RuntimeError(f"cannot find the original image link: {page_url}")
 
     original_links = soup.select("div#i6 a")
     original_link = original_links[-1] if original_links else None
     if not original_link or not original_link.get("href"):
-        raise RuntimeError(f"找不到原图链接: {page_url}")
+        raise RuntimeError(f"cannot find the original image link: {page_url}")
     return image["src"], original_link["href"]
 
 
@@ -113,13 +122,16 @@ def get_links_and_download(
     save_dir: Path = SAVE_DIR,
 ) -> tuple[str, int]:
     successful_count = 0
-    image_index = 0
+
     first_page = fetch_soup(session, gallery_url)
-    length = int(first_page.select("td.gdt2")[-2].get_text().split()[0])
+
     title_el = first_page.select_one("h1#gn")
     title = clean_filename(title_el.get_text(strip=True) if title_el else "gallery")
     console.print(title)
-    gallery_pages = get_gallery_page_urls(first_page, gallery_url)
+    result = get_gallery_page_urls(first_page, gallery_url)
+    gallery_pages = result["page_urls"]
+    length = result["page_range"][1] - result["page_range"][0]
+    image_index = result["page_range"][0] - 1
     save_path = save_dir / title
     save_path.mkdir(parents=True, exist_ok=True)
 
@@ -183,7 +195,7 @@ def get_links_and_download(
                 except requests.RequestException as exc:
                     fallback_name = file_path.name if file_path else f"{image_index:04d}.jpg"
                     fallback_path = file_path or save_path / fallback_name
-                    progress.console.print(f"[red]原图请求失败[/red] {fallback_name}，下载普通质量图: {exc}")
+                    progress.console.print(f"[red]Failed to fetch the original image[/red] {fallback_name}，Falling back to the normal quality image instead: {exc}")
                     if not normal_link:
                         progress.update(page_task, advance=1)
                         continue
@@ -217,8 +229,8 @@ def main() -> None:
     session = build_session()
     gallery_url = input_gallery_url()
     title, cnt = get_links_and_download(session, gallery_url)
-    console.print(f"成功下载 {cnt} 张图片，保存到: {SAVE_DIR / title}")
-
+    # console.print(f"成功下载 {cnt} 张图片，保存到: {SAVE_DIR / title}")
+    console.print(f"Downloaded {cnt} images to: {SAVE_DIR / title}")
 
 if __name__ == "__main__":
     main()
