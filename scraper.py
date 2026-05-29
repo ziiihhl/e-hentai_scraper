@@ -91,16 +91,10 @@ def fetch_soup(session: requests.Session, url: str) -> BeautifulSoup:
     return BeautifulSoup(response.content, "lxml")
 
 
-def get_gallery_page_urls(soup: BeautifulSoup, gallery_url: str) -> dict:
-    start , end = input_pages_to_download()
-    total_pages = int(soup.select("td.gdt2")[-2].get_text().split()[0])
-    if start == -1 and end == -1:
-        start = 1
-        end = total_pages
-    return {
-        "page_urls" : [f"{gallery_url}?p={page}" for page in range(start - 1,end)],
-        "page_range" : [start,end]
-    }
+def get_gallery_page_urls(soup: BeautifulSoup, gallery_url: str) -> list:
+    page_numbers = int(soup.select("table.ptt a")[-2].get_text())
+    return [f"{gallery_url}?p={page}" for page in range(page_numbers)]
+
 
 
 def get_image_url(session: requests.Session, page_url: str) -> tuple[str, str]:
@@ -122,16 +116,20 @@ def get_links_and_download(
     save_dir: Path = SAVE_DIR,
 ) -> tuple[str, int]:
     successful_count = 0
-
     first_page = fetch_soup(session, gallery_url)
-
+    total_pages = int(first_page.select("td.gdt2")[-2].get_text().split()[0])
     title_el = first_page.select_one("h1#gn")
     title = clean_filename(title_el.get_text(strip=True) if title_el else "gallery")
     console.print(title)
-    result = get_gallery_page_urls(first_page, gallery_url)
-    gallery_pages = result["page_urls"]
-    length = result["page_range"][1] - result["page_range"][0]
-    image_index = result["page_range"][0] - 1
+    start,end = input_pages_to_download()
+    if start and end == -1:
+        start = 1
+        end = total_pages
+    if end > total_pages:
+        end = total_pages
+    gallery_pages = get_gallery_page_urls(first_page, gallery_url)
+    image_index = start - 1
+    length = end - start + 1
     save_path = save_dir / title
     save_path.mkdir(parents=True, exist_ok=True)
 
@@ -147,78 +145,80 @@ def get_links_and_download(
     ) as progress:
         page_task = progress.add_task("Images in total", total=length)
         download_task = progress.add_task("Waiting", total=1)
+        image_pages = []
         for gallery_page in gallery_pages:
             soup = first_page if gallery_page == f"{gallery_url}?p=0" else fetch_soup(session, gallery_page)
-            image_pages = [a["href"] for a in soup.select("div#gdt a[href]")]
-            for image_page in image_pages:
-                normal_link = ""
-                file_path: Path | None = None
-                try:
-                    normal_link, link = get_image_url(session, image_page)
-                    image_index += 1
-                    file_path = save_path / f"{image_index:04d}{image_extension(link)}"
-                    head_response = session.head(
-                        link,
-                        allow_redirects=True,
-                        timeout=REQUEST_TIMEOUT,
+            image_pages.extend([a["href"] for a in soup.select("div#gdt a[href]")])
+        for image_page in image_pages[start - 1 : end]:
+            normal_link = ""
+            file_path: Path | None = None
+            try:
+                normal_link, link = get_image_url(session, image_page)
+                image_index += 1
+                file_path = save_path / f"{image_index:04d}{image_extension(link)}"
+                head_response = session.head(
+                    link,
+                    allow_redirects=True,
+                    timeout=REQUEST_TIMEOUT,
+                )
+                image_size = int(head_response.headers.get("content-length") or 0)
+
+                if file_path.exists() and file_path.stat().st_size == image_size:
+                    progress.update(
+                        download_task,
+                        description=f"Skipped {file_path.name}",
+                        total=1,
+                        completed=1,
                     )
-                    image_size = int(head_response.headers.get("content-length") or 0)
-
-                    if file_path.exists() and file_path.stat().st_size == image_size:
-                        progress.update(
-                            download_task,
-                            description=f"Skipped {file_path.name}",
-                            total=1,
-                            completed=1,
-                        )
-                        progress.update(page_task, advance=1)
-                        continue
-
-                    with session.get(link, stream=True, timeout=REQUEST_TIMEOUT) as response:
-                        response.raise_for_status()
-                        total = int(response.headers.get("content-length") or 0)
-                        progress.update(
-                            download_task,
-                            description=f"Downloading {file_path.name}",
-                            total=total or None,
-                            completed=0,
-                        )
-
-                        with file_path.open("wb") as f:
-                            for chunk in response.iter_content(chunk_size=DOWNLOAD_CHUNK_SIZE):
-                                if chunk:
-                                    f.write(chunk)
-                                    progress.update(download_task, advance=len(chunk))
-                        progress.update(page_task, advance=1)
-                    successful_count += 1
-                    time.sleep(REQUEST_DELAY)
-                except requests.RequestException as exc:
-                    fallback_name = file_path.name if file_path else f"{image_index:04d}.jpg"
-                    fallback_path = file_path or save_path / fallback_name
-                    progress.console.print(f"[red]Failed to fetch the original image[/red] {fallback_name}，Falling back to the normal quality image instead: {exc}")
-                    if not normal_link:
-                        progress.update(page_task, advance=1)
-                        continue
-
-                    with session.get(normal_link, stream=True, timeout=REQUEST_TIMEOUT) as response:
-                        response.raise_for_status()
-                        total = int(response.headers.get("content-length") or 0)
-                        progress.update(
-                            download_task,
-                            description=f"Downloading {fallback_name}",
-                            total=total or None,
-                            completed=0,
-                        )
-                        with fallback_path.open("wb") as f:
-                            for chunk in response.iter_content(chunk_size=DOWNLOAD_CHUNK_SIZE):
-                                if chunk:
-                                    f.write(chunk)
-                                    progress.update(download_task, advance=len(chunk))
-                        progress.update(page_task, advance=1)
-                        successful_count += 1
-                except RuntimeError as exc:
-                    progress.console.print(f"[yellow]{exc}[/yellow]")
                     progress.update(page_task, advance=1)
+                    continue
+
+                with session.get(link, stream=True, timeout=REQUEST_TIMEOUT) as response:
+                    response.raise_for_status()
+                    total = int(response.headers.get("content-length") or 0)
+                    progress.update(
+                        download_task,
+                        description=f"Downloading {file_path.name}",
+                        total=total or None,
+                        completed=0,
+                    )
+
+                    with file_path.open("wb") as f:
+                        for chunk in response.iter_content(chunk_size=DOWNLOAD_CHUNK_SIZE):
+                            if chunk:
+                                f.write(chunk)
+                                progress.update(download_task, advance=len(chunk))
+                    progress.update(page_task, advance=1)
+                successful_count += 1
+                time.sleep(REQUEST_DELAY)
+            except requests.RequestException as exc:
+                fallback_name = file_path.name if file_path else f"{image_index:04d}.jpg"
+                fallback_path = file_path or save_path / fallback_name
+                progress.console.print(
+                    f"[red]Failed to fetch the original image[/red] {fallback_name}，Falling back to the normal quality image instead: {exc}")
+                if not normal_link:
+                    progress.update(page_task, advance=1)
+                    continue
+
+                with session.get(normal_link, stream=True, timeout=REQUEST_TIMEOUT) as response:
+                    response.raise_for_status()
+                    total = int(response.headers.get("content-length") or 0)
+                    progress.update(
+                        download_task,
+                        description=f"Downloading {fallback_name}",
+                        total=total or None,
+                        completed=0,
+                    )
+                    with fallback_path.open("wb") as f:
+                        for chunk in response.iter_content(chunk_size=DOWNLOAD_CHUNK_SIZE):
+                            if chunk:
+                                f.write(chunk)
+                                progress.update(download_task, advance=len(chunk))
+                    progress.update(page_task, advance=1)
+                    successful_count += 1
+            except RuntimeError as exc:
+                progress.console.print(f"[yellow]{exc}[/yellow]")
+                progress.update(page_task, advance=1)
 
     return title, successful_count
 
